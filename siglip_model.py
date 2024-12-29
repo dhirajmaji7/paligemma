@@ -65,6 +65,68 @@ class SiglipVisionEmbeddings(nn.Module):
         return embeddings # [batch, num_patches, embd_dim]
 
 
+class SiglipAttention(nn.Module):
+
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.embd_dim = config.embd_dim
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.embd_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5  # 1 / sqrt(head_dim)
+        self.dropout = config.attention_dropout
+
+        self.q_proj = nn.Linear(self.embd_dim, self.embd_dim)
+        self.k_proj = nn.Linear(self.embd_dim, self.embd_dim)
+        self.v_proj = nn.Linear(self.embd_dim, self.embd_dim)
+        self.out_proj = nn.Linear(self.embd_dim, self.embd_dim)
+
+    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        # hidden_states: [batch, num_patches, embd_dim]
+        batch_size, seq_len, _ = hidden_states.size()
+        
+        # [batch, num_patches, embd_dim]
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        # [batch, num_patches, num_heads, head_dim] -> [batch, num_heads, num_patches, head_dim]
+        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # [batch, num_heads, num_patches, num_patches]
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.scale
+        
+        if attn_weights.size() != (batch_size, self.num_heads, seq_len, seq_len):
+            raise ValueError(
+                f"Attention weights should be of size {(batch_size, self.num_heads, seq_len, seq_len)}, "
+                f"but is {attn_weights.size()}"
+            )
+
+        # [batch, num_heads, num_patches, num_patches]
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        
+        # [batch, num_heads, num_patches, head_dim]
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        if attn_output.size() != (batch_size, self.num_heads, seq_len, self.head_dim):
+            raise ValueError(
+                f"Attention output should be of size {(batch_size, self.num_heads, seq_len, self.head_dim)}, "
+                f"but is {attn_output.size()}"
+            )
+
+        # [batch, num_heads, num_patches, head_dim] -> [batch, num_patches, num_heads, head_dim]
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        # [batch, num_patches, embd_dim]
+        attn_output = attn_output.reshape(batch_size, seq_len, self.embd_dim)
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output, attn_weights
+
+
 class SiglipMLP(nn.Module):
 
     def __init__(self, config: SiglipVisionConfig):
@@ -74,7 +136,7 @@ class SiglipMLP(nn.Module):
         self.fc2 = nn.Linear(config.intermediate_dim, config.embd_dim)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        # hidden_states : [batch, num_patches, embd_dim]
+        # hidden_states: [batch, num_patches, embd_dim]
         hidden_states = self.fc1(hidden_states) # [batch, num_patches, intermediate_dim]
         hidden_states = nn.functional.gelu(hidden_states, approximate="tanh") # [batch, num_patches, intermediate_dim]
         hidden_states = self.fc2(hidden_states) # [batch, num_patches, embd_dim]
@@ -103,6 +165,25 @@ class SiglipEncoderLayer(nn.Module):
         hidden_states = residual + hidden_states # [batch, num_patches, embd_dim]
         
         return hidden_states # [batch, num_patches, embd_dim]
+
+
+class SiglipEncoder(nn.Module):
+
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList(
+            [SiglipEncoderLayer(config) for _ in range(config.num_layers)]
+        )
+
+    def forward(self, inputs_embeds: torch.Tensor) -> torch.Tensor:
+        # [batch, num_patches, embd_dim]
+        hidden_states = inputs_embeds
+
+        for encoder_layer in self.layers:
+            hidden_states = encoder_layer(hidden_states)
+
+        return hidden_states
 
 
 class SiglipVisionTransformer(nn.Module):
