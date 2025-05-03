@@ -1,0 +1,57 @@
+{
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+        },
+    "name": "paligemma_ws",
+    "workspaceMount": "source=${localWorkspaceFolder},destination=/home/dmaji/paligemma,type=bind",
+    "workspaceFolder": "/home/dmaji/paligemma",
+    "privileged": true,
+    "mounts": [
+        "source=/tmp/.X11-unix,destination=/tmp/.X11-unix,type=bind", // for GUI apps
+        "source=${localEnv:HOME}/.Xauthority,destination=/home/dmaji/.Xauthority,type=bind", // for GUI apps
+        "source=/dev,destination=/dev,type=bind", // for USB
+        "source=/etc/localtime,destination=/etc/localtime,type=bind,readonly"
+    ],
+    "securityOpt": [
+        "seccomp=unconfined"
+    ],
+    "capAdd": [
+        "SYS_PTRACE"
+    ],
+    "containerEnv": {
+        "DISPLAY": "${localEnv:DISPLAY}",
+        "QT_X11_NO_MITSHM": "1",
+        "NVIDIA_VISIBLE_DEVICES": "all",  
+        "NVIDIA_DRIVER_CAPABILITIES": "all",
+        "TERM": "xterm-256color",
+        "XDG_RUNTIME_DIR": "/tmp/runtime-dmaji"
+    },
+    "remoteEnv": {
+        "TERM": "xterm-256color" 
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "mhutchie.git-graph",
+                "eamodio.gitlens",
+                "ms-azuretools.vscode-docker",
+                "ms-python.python"
+            ],
+            "settings": {
+                "workbench.colorCustomizations": {
+                    "statusBar.background": "#018a45"
+                }
+            }
+        }
+    },
+    "runArgs": [
+        "--network=host",
+        "--name=paligemma_ws",
+        "--rm",
+        "--gpus=all",
+        "--runtime=nvidia",
+        "--shm-size=8g", // 8GB RAM for DL projects
+        "--user=dmaji"
+    ]
+}
