@@ -14,7 +14,6 @@ def add_image_tokens_to_prompt(prefix_prompt, bos_token, image_seq_len, image_to
     #       this is tokenized with the rest of the prompt
     return f"{image_token * image_seq_len}{bos_token}{prefix_prompt}\n"
 
-# TODO: Check return type
 def resize(
     image: Image,
     size: Tuple[int, int],
@@ -37,17 +36,16 @@ def rescale(
 def normalize(
     image: np.ndarray,
     mean: Union[float, Iterable[float]],
-    std: Union[float, Iterable[float]]
+    std: Union[float, Iterable[float]] 
 ) -> np.ndarray:
     mean = np.array(mean, dtype=image.dtype)
     std = np.array(std, dtype=image.dtype)
     image = (image - mean) / std
     return image
 
-# TODO: Loop through images only once and do all the processing
 def process_images(
     images: List[Image.Image],
-    size: Dict[str, int] = None,
+    size: Tuple[int, int] = None,
     resample: Image.Resampling = None,
     rescale_factor: float = None,
     image_mean: Optional[Union[float, List[float]]] = None,
