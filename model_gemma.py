@@ -72,6 +72,101 @@ class PaliGemmaConfig():
         self.vision_config.projection_dim = projection_dim
 
 
+class GemmaModel(nn.Module):
+
+    def __init__(self, config: GemmaConfig):
+        super().__init__()
+        self.config = config
+        self.padding_idx = config.pad_token_id
+        self.vocab_size = config.vocab_size
+
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.layers = nn.ModuleList(
+            [GemmaDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        )
+        self.norm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+    
+    def forward(
+        self,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        kv_cache: Optional[KVCache] = None,
+    ) -> torch.FloatTensor:
+        
+        hidden_states = inputs_embeds
+        normalizer = torch.tensor(self.config.hidden_size ** 0.5, dtype=hidden_states.dtype, device=hidden_states.device)
+        hidden_states = hidden_states * normalizer
+
+        for decoder_layer in self.layers:
+            hidden_states = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                kv_cache=kv_cache
+            )
+        
+        hidden_states = self.norm(hidden_states)
+        
+        return hidden_states
+
+
+class GemmaForCausalLM(nn.Module):
+
+    def __init__(self, config: GemmaConfig):
+        super().__init__()
+        self.config = config
+        self.model = GemmaModel(config)
+        self.vocab_size = config.vocab_size
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+    
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+    
+    def tie_weights(self):
+        self.lm_head.weight = self.model.embed_tokens.weight
+    
+    def forward(
+        self,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        kv_cache: Optional[KVCache] = None,
+    ) -> Tuple:
+        
+        outputs = self.model(
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            kv_cache=kv_cache
+        )
+
+        logits = self.lm_head(outputs)
+        logits = logits.float()
+
+        return_data = {"logits": logits}
+
+        if kv_cache is not None:
+            return_data["kv_cache"] = kv_cache
+        
+        return return_data
+
+
+class PaliGemmaMultiModalProjector(nn.Module):
+
+    def __init__(self, config: PaliGemmaConfig):
+        super().__init__()
+        self.linear = nn.Linear(config.vision_config.hidden_size, config.vision_config.projection_dim, bias=True)
+
+    def forward(self, image_features):
+        # [B, num_patches, embed_dim] -> [B, num_patches, projection_dim]
+        hidden_states = self.linear(image_features)
+        return hidden_states
+
+
 class PaliGemmaForConditionalGeneration(nn.Module):
     
     def __init__(self, config: PaliGemmaConfig):
@@ -137,13 +232,27 @@ class PaliGemmaForConditionalGeneration(nn.Module):
             kv_len = kv_cache.num_items() + q_len
 
             # In this case as well, we do not need to mask anything since each query should be able to attend to all previous tokens
+            # Since we use KV Cache, at each step we do not need to mask anything as we have only 1 query
             # This only works when we have no padding
             causal_mask = torch.full(
                 (batch_size, q_len, kv_len), fill_value=0, dtype=dtype, device=device
             )
+
+        # Add the head dimension: [B, q_len, kv_len] -> [B, num_heads_Q, q_len, kv_len]
+        causal_mask = causal_mask.unsqueeze(1)
+
+        if kv_cache is not None and kv_cache.num_items() > 0:
+            # Attention mask: [1, 1, 1, 1, ...], cumsum(-1): [1, 2, 3, 4, ...]
+            # During incremental generation, we only add one new token, so we only need the last position id
+            position_ids = attention_mask.cumsum(-1)[:, -1]
+            if position_ids.dim() == 1:
+                position_ids = position_ids.unsqueeze(0)
+        else:
+            # In prefilling phase, no KV Cache exists, so we compute the position ids for every token
+            # Set padded tokens to a safe default position id of 1
+            position_ids = (attention_mask.cumsum(-1)).masked_fill_((attention_mask == 0), 1).to(device)
         
-
-
+        return final_embedding, causal_mask, position_ids
         
 
     def forward(
