@@ -72,6 +72,41 @@ class PaliGemmaConfig():
         self.vision_config.projection_dim = projection_dim
 
 
+class KVCache():
+
+    def __init__(self):
+        self.key_cache: List[torch.Tensor] = []
+        self.value_cache: List[torch.Tensor] = []
+    
+    def num_items(self) -> int:
+        if len(self.key_cache) == 0:
+            return 0
+        else:
+            # Shape of items in key_cache: [B, num_heads_KV, seq_len, head_dim]
+            return self.key_cache[0].shape[-2]
+
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        
+        if len(self.key_cache) <= layer_idx:
+            # If we never added anything to the KV-cache of this layer, then create a new one 
+            self.key_cache.append(key_states)
+            self.value_cache.append(value_states)
+        else:
+            # Otherwise, we concatenate the new keys with the existing ones
+            # Tensor shape: [B, num_heads_KV, seq_len, head_dim]
+            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+        
+        # return the existing keys + new key
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+
+
 class GemmaRMSNorm(nn.Module):
 
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -153,7 +188,22 @@ class GemmaAttention(nn.Module):
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         
-        
+        batch_size, q_len, _ = hidden_states.shape # [B, seq_len, hidden_size]
+        query_states = self.q_proj(hidden_states) # [B, seq_len, num_heads_Q * head_dim]
+        key_states   = self.k_proj(hidden_states) # [B, seq_len, num_heads_KV * head_dim]
+        value_states = self.v_proj(hidden_states) # [B, seq_len, num_heads_KV * head_dim]
+
+        query_states = query_states.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states   = key_states.view(batch_size, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+        # Add rotary position embeddings
+        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=None)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if kv_cache is not None:
+            key_states, value_states = kv_cache.update(key_states, value_states, self.layer_idx)
+
         
 
 
