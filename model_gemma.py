@@ -143,6 +143,14 @@ class GemmaMLP(nn.Module):
         return hidden_states
 
 
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+    if n_rep == 1:
+        return hidden_states
+    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+
+
 class GemmaAttention(nn.Module):
     
     def __init__(self, config: GemmaConfig, layer_idx: Optional[int] = None):
@@ -203,10 +211,37 @@ class GemmaAttention(nn.Module):
 
         if kv_cache is not None:
             key_states, value_states = kv_cache.update(key_states, value_states, self.layer_idx)
-
         
+        # Repeat the keys and values to match the number of query heads
+        # Here we do not have the custom cuda kernels required to use the grouped query attention
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
 
+        # [B, num_heads_Q, seq_len_Q, seq_len_KV]
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
+        assert attention_mask is not None
+        attn_weights = attn_weights + attention_mask
+
+        # [B, num_heads_Q, seq_len_Q, seq_len_KV]
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+
+        # [B, num_heads_Q, seq_len_Q, seq_len_KV] -> [B, num_heads_Q, seq_len_Q, head_dim]
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        if attn_output.size() != (batch_size, self.num_heads, q_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(batch_size, self.num_heads, q_len, self.head_dim)}, "
+                f"but is {attn_output.size()}"
+            )
+        
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(batch_size, q_len, -1)
+
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output, attn_weights
         
 
 class GemmaDecoderLayer(nn.Module):
