@@ -167,11 +167,38 @@ class GemmaRotaryEmbedding(nn.Module):
     def forward(self, x, position_ids, seq_len=None):
         # x: [B, num_heads, seq_len, head_dim]
         self.inv_freq.to(x.device)
+        # inv_freq_expanded: [B, head_dim // 2, 1]
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        # position_ids_expanded: [B, 1, seq_len]
         position_ids_expanded = position_ids[:, None, :].float()
         device_type = x.device.type
         device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
 
+        with torch.autocast(device_type=device_type, enabled=False):
+            # freqs = (m * theta): [B, head_dim // 2, 1] @ [B, 1, seq_len] --> [B, seq_len, head_dim // 2]
+            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            # emb: [B, seq_len, head_dim]
+            # Hugging face implementation which differs from original paper in the orderering of the emb
+            emb = torch.cat((freqs, freqs), dim=-1)
+            # cos, sin: [B, seq_len, head_dim]
+            cos = emb.cos()
+            sin = emb.sin()
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+def rotate_half(x):
+    # Build the [-x2, x1, -x4, x3, ...] tensor for the sin part of the positional encoding
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 : ]
+    return torch.cat((-x2, x1), dim=-1)
+
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+    # Add the head dimension
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    # Equation (34) of the Rotary Positional Encoding paper
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
 
 
 class GemmaAttention(nn.Module):
