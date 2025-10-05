@@ -471,7 +471,7 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         final_embedding = torch.where(text_mask_expanded, inputs_embeds, final_embedding)
         # Insert the image embeddings. Since seq_len of scaled_image_features != final_embedding, we need to use 
         # torch.masked_scatter to fill the values from scaled_image_features into final embedding instead of torch.where
-        final_embedding = torch.masked_scatter(image_mask_expanded, scaled_image_features)
+        final_embedding = final_embedding.masked_scatter(image_mask_expanded, scaled_image_features,)
         # Zero out the padding tokens
         final_embedding = torch.where(pad_mask_expanded, torch.zeros_like(final_embedding), final_embedding)
 

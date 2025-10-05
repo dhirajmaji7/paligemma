@@ -24,8 +24,8 @@ RUN pip install transformers tiktoken timm wandb
 
 # Add user ubuntu and set permissions
 # RUN useradd -m -s /bin/bash ubuntu && \
-#     echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
-#     chown -R ubuntu: /home/ubuntu
+RUN echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
+    chown -R ubuntu: /home/ubuntu
 
 # Add bashrc
 COPY ./.devcontainer/.bashrc /home/ubuntu/.bashrc
