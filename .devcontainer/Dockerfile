@@ -17,6 +17,11 @@ RUN python -m pip install --upgrade pip
 # Install PyTorch 2.0.1 (CUDA 11.8)
 RUN pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 --extra-index-url https://download.pytorch.org/whl/cu118
 
+RUN pip install -U tqdm matplotlib fire
+
+# Install transformers from Hugging Face
+RUN pip install transformers tiktoken timm wandb
+
 # Add user ubuntu and set permissions
 RUN useradd -m -s /bin/bash ubuntu && \
     echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
