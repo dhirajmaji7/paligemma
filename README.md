@@ -32,6 +32,11 @@ This repository contains the implementation of the PaliGemma model from scratch.
    cd paligemma
    ```
 
+2. **Docker**
+
+    You can use the dev-containers to run the model inference, or create your own image using the dockerfile - `.devcontainer/Dockerfile.inference` and mount this repository inside your container.
+
+
 
 ## Usage
 
