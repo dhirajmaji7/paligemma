@@ -1,6 +1,7 @@
 # PaliGemma
 
-This repository contains the implementation of the PaliGemma model from scratch. It uses the Gemma language model and SigLIP vision model and includes scripts for loading models, running inference, and processing images.
+This repository contains the implementation of the PaliGemma Vision-Language Model (VLM) entirely from scratch, integrating the SigLIP vision encoder and Gemma language model into a unified multimodal transformer with prefix-LM masking, grouped/multi-query attention, rotary embeddings, and contrastive pretraining objectives for cross-modal alignment.
+It has a modular multimodal inference framework featuring KV cache optimization, top-p sampling, and weight tying between embedding and LM head layers — enabling efficient autoregressive text generation from image inputs and prompts.
 
 ## Key Topics
 
